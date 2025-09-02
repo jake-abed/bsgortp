@@ -43,14 +43,14 @@ func TestPostsWithLinks(t *testing.T) {
 			"https://cats.cool",
 			1,
 			9,
-			26,
+			18,
 		},
 		{
 			"https://lucky.me is a copy of dog.dev",
 			"https://lucky.me",
 			2,
 			0,
-			16,
+			8,
 		},
 		{
 			"my website is jakeabed.dev",
@@ -64,7 +64,7 @@ func TestPostsWithLinks(t *testing.T) {
 			"http://scooby.doo",
 			2,
 			0,
-			17,
+			10,
 		},
 	}
 
@@ -107,21 +107,25 @@ func TestPostsWithLinks(t *testing.T) {
 
 func TestAllInOne(t *testing.T) {
 	post, err := GenPost(
-		"Hey @jakeabed.dev, jakeabed.dev is a #buggy site #おはようVtuber ",
+		"Hey @jakeabed.dev, jakeabed.dev is a #buggy site #おはようVtuber https://github.com/jake-abed/bsgortp http://bsky.app/ staging.bsky.app/search?q=%E6%9C%AC%E5%85%AC%E6%BC%94+lang%3Aja ",
 		[]string{"en"},
 	)
 	if err != nil {
 		t.Errorf("error generating post: %s", err.Error())
 	}
 
-	if len(post.Facets) != 4 {
-		t.Errorf("expected 4 facets, got=%d", len(post.Facets))
+	if len(post.Facets) != 7 {
+		t.Errorf("expected 7 facets, got=%d", len(post.Facets))
 	}
 
-	fourth := post.Facets[1].Features[0] //includes Non-English letters
-	third := post.Facets[0].Features[0]
-	second := post.Facets[2].Features[0]
-	first := post.Facets[3].Features[0]
+	//TODO order may change because goroutine is used
+	seventh := post.Facets[3].Features[0]
+	sixth := post.Facets[2].Features[0]
+	fifth := post.Facets[1].Features[0]
+	fourth := post.Facets[5].Features[0] //includes Non-English letters
+	third := post.Facets[4].Features[0]
+	second := post.Facets[0].Features[0]
+	first := post.Facets[6].Features[0]
 
 	if first.RichtextFacet_Mention == nil {
 		t.Errorf("expected first facet to be mention!")
@@ -139,6 +143,16 @@ func TestAllInOne(t *testing.T) {
 		t.Errorf("expected fourth facet to be tag!")
 	}
 
+	if fifth.RichtextFacet_Link == nil {
+		t.Errorf("expected second facet to be link!")
+	}
+	if sixth.RichtextFacet_Link == nil {
+		t.Errorf("expected second facet to be link!")
+	}
+	if seventh.RichtextFacet_Link == nil {
+		t.Errorf("expected second facet to be link!")
+	}
+
 	if second.RichtextFacet_Link.Uri != "https://jakeabed.dev" {
 		t.Errorf("second facet uri wrong, got=%s expected=%s",
 			second.RichtextFacet_Link.Uri, "https://jakeabed.dev")
@@ -152,5 +166,18 @@ func TestAllInOne(t *testing.T) {
 	if fourth.RichtextFacet_Tag.Tag != "おはようVtuber" {
 		t.Errorf("fourth facet tag wrong, got=%s expected=%s",
 			fourth.RichtextFacet_Tag.Tag, "おはようVtuber")
+	}
+
+	if fifth.RichtextFacet_Link.Uri != "https://github.com/jake-abed/bsgortp" {
+		t.Errorf("fifth facet uri wrong, got=%s expected=%s",
+			fifth.RichtextFacet_Link.Uri, "https://github.com/jake-abed/bsgortp")
+	}
+	if sixth.RichtextFacet_Link.Uri != "http://bsky.app/" {
+		t.Errorf("sixth facet uri wrong, got=%s expected=%s",
+			sixth.RichtextFacet_Link.Uri, "http://bsky.app/")
+	}
+	if seventh.RichtextFacet_Link.Uri != "https://staging.bsky.app/search?q=%E6%9C%AC%E5%85%AC%E6%BC%94+lang%3Aja" {
+		t.Errorf("seventh facet uri wrong, got=%s expected=%s",
+			seventh.RichtextFacet_Link.Uri, "https://staging.bsky.app/search?q=%E6%9C%AC%E5%85%AC%E6%BC%94+lang%3Aja")
 	}
 }

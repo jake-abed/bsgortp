@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -14,6 +15,8 @@ import (
 )
 
 // *TODO Improve and test regex for reliability and stability.
+// https://stackoverflow.com/a/1133454/3809427
+// https://en.wikipedia.org/wiki/Internationalized_domain_name
 const LINK_EXP = `(http(s)?:\/\/.)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\` +
 	`.[a-z]{2,6}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)`
 
@@ -53,7 +56,7 @@ func GenPost(text string, langs []string) (*bsky.FeedPost, error) {
 
 	now := time.Now().Format(time.RFC3339)
 
-	facets, err := genFacets(text)
+	text, facets, err := genFacets(text)
 	if err != nil {
 		return nil, err
 	}
@@ -72,34 +75,36 @@ func GenPost(text string, langs []string) (*bsky.FeedPost, error) {
 
 // genFacets takes the text and delegates out responsibility to several other
 // helper functions to parse.
-func genFacets(text string) ([]*bsky.RichtextFacet, error) {
-	facetChan := make(chan *FacetGenResult, 3)
+func genFacets(text string) (string, []*bsky.RichtextFacet, error) {
+	text, facets, err := genLinkFacets(text)
+	if err != nil {
+		return text, nil, err
+	}
 
+	facetChan := make(chan *FacetGenResult, 2)
 	go genMentionFacets(text, facetChan)
-	go genLinkFacets(text, facetChan)
 	go genTagFacets(text, facetChan)
 
-	facets := []*bsky.RichtextFacet{}
-
-	for range 3 {
+	for range 2 {
 		facetGenResult := <-facetChan
 		if facetGenResult.Error != nil {
-			return nil, facetGenResult.Error
+			return text, nil, facetGenResult.Error
 		}
 		facets = append(facets, facetGenResult.Facets...)
 	}
 
-	return facets, nil
+	return text, facets, nil
 }
 
-func genLinkFacets(text string, c chan<- *FacetGenResult) {
+const UrlLengthLimit = 24
+
+func genLinkFacets(text string) (string, []*bsky.RichtextFacet, error) {
 	r, err := regexp.Compile(LINK_EXP)
 	if err != nil {
 		err := fmt.Errorf(
 			"could not compile link detection regex during facet generation",
 		)
-		c <- &FacetGenResult{Facets: nil, Error: err}
-		return
+		return text, nil, err
 	}
 
 	urlMatches := r.FindAllString(text, -1)
@@ -107,54 +112,69 @@ func genLinkFacets(text string, c chan<- *FacetGenResult) {
 
 	if len(urlMatches) != len(bytePositions) {
 		err := fmt.Errorf(
-			"urlStrings=%v & bytePositions=%v not matched in facet generation\n",
+			"urlStrings=%v & bytePositions=%v not matched in facet generation",
 			urlMatches,
 			bytePositions,
 		)
-		c <- &FacetGenResult{Facets: nil, Error: err}
-		return
+		return text, nil, err
 	}
 
 	facets := []*bsky.RichtextFacet{}
 
 	for i := range urlMatches {
-		url := urlMatches[i]
-
-		if []rune(url)[0] == '@' {
+		originalUrl := urlMatches[i]
+		if originalUrl[0] == '@' || originalUrl[0] == '#' {
 			continue
 		}
 
-		if len(url) > 7 {
-			firstSeven := url[0:7]
+		linkUrl := originalUrl
+		urlStr := originalUrl
 
-			if firstSeven != "https:/" && firstSeven != "http://" {
-				url = "https://" + url
+		if len(originalUrl) > 7 {
+			firstSeven := originalUrl[0:7]
+			switch firstSeven {
+			case "https:/":
+				urlStr = originalUrl[8:]
+			case "http://":
+				urlStr = originalUrl[7:]
+			default:
+				linkUrl = "https://" + originalUrl
 			}
 		} else {
-			url = "https://" + url
+			linkUrl = "https://" + originalUrl
+		}
+
+		if len(urlStr) > UrlLengthLimit {
+			urlStr = urlStr[:UrlLengthLimit-2] + ".."
+		}
+
+		//replace only first
+		if urlStr != originalUrl {
+			text = strings.Replace(text, originalUrl, urlStr, 1)
 		}
 
 		facetLink := bsky.RichtextFacet_Link{
 			LexiconTypeID: "app.bsky.richtext.facet#link",
-			Uri:           url,
+			Uri:           linkUrl,
 		}
 
 		facetElem := bsky.RichtextFacet_Features_Elem{
 			RichtextFacet_Link: &facetLink,
 		}
 
+		byteStart := bytePositions[i][0]
 		facet := bsky.RichtextFacet{
 			Features: []*bsky.RichtextFacet_Features_Elem{&facetElem},
 			Index: &bsky.RichtextFacet_ByteSlice{
-				ByteStart: int64(bytePositions[i][0]),
-				ByteEnd:   int64(bytePositions[i][1]),
+				ByteStart: int64(byteStart),
+				ByteEnd:   int64(byteStart + len(urlStr)),
 			},
 		}
 
 		facets = append(facets, &facet)
 	}
 
-	c <- &FacetGenResult{Facets: facets, Error: nil}
+	return text, facets, nil
 }
 
 // genMentionFacets is the most tenuous of the three because it relies on a
@@ -174,7 +194,7 @@ func genMentionFacets(text string, c chan<- *FacetGenResult) {
 
 	if len(mentionMatches) != len(bytePositions) {
 		err := fmt.Errorf(
-			"mentionStrings=%v & bytePositions=%v not matched in facet generation\n",
+			"mentionStrings=%v & bytePositions=%v not matched in facet generation",
 			mentionMatches,
 			bytePositions,
 		)
@@ -242,7 +262,7 @@ func genTagFacets(text string, c chan<- *FacetGenResult) {
 
 	if len(tagMatches) != len(bytePositions) {
 		err := fmt.Errorf(
-			"tagStrings=%v & bytePositions=%v not matched in facet generation\n",
+			"tagStrings=%v & bytePositions=%v not matched in facet generation",
 			tagMatches,
 			bytePositions,
 		)
